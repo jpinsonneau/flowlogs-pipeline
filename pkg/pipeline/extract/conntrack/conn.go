@@ -36,7 +36,7 @@ type connection interface {
 	getExpiryTime() time.Time
 	setNextHeartbeatTime(t time.Time)
 	getNextHeartbeatTime() time.Time
-	toGenericMap() config.GenericMap
+	toGenericMap(trackerId string) config.GenericMap
 	getHash() totalHashType
 	// markReported marks the connection as has been reported. That is, at least one connection record has been emitted
 	// for this connection (i.e. newConnection, heartbeat, endConnection).
@@ -97,7 +97,7 @@ func (c *connType) getNextHeartbeatTime() time.Time {
 	return c.nextHeartbeatTime
 }
 
-func (c *connType) toGenericMap() config.GenericMap {
+func (c *connType) toGenericMap(trackerId string) config.GenericMap {
 	gm := config.GenericMap{}
 	for k, v := range c.aggFields {
 		gm[k] = v
@@ -107,6 +107,8 @@ func (c *connType) toGenericMap() config.GenericMap {
 	for k, v := range c.keys {
 		gm[k] = v
 	}
+
+	gm["TrackerID"] = trackerId
 	return gm
 }
 

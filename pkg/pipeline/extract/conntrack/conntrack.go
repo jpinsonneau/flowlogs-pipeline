@@ -24,6 +24,7 @@ import (
 	"strconv"
 
 	"github.com/benbjohnson/clock"
+	"github.com/google/uuid"
 	"github.com/netobserv/flowlogs-pipeline/pkg/api"
 	"github.com/netobserv/flowlogs-pipeline/pkg/config"
 	"github.com/netobserv/flowlogs-pipeline/pkg/operational"
@@ -49,6 +50,7 @@ type conntrackImpl struct {
 	hashProvider                     func() hash.Hash64
 	connStore                        *connectionStore
 	aggregators                      []aggregator
+	trackerId                        string
 	shouldOutputFlowLogs             bool
 	shouldOutputNewConnection        bool
 	shouldOutputEndConnection        bool
@@ -136,7 +138,7 @@ func (ct *conntrackImpl) popEndConnections() []config.GenericMap {
 	var outputRecords []config.GenericMap
 	// Convert the connections to GenericMaps and add meta fields
 	for _, conn := range connections {
-		record := conn.toGenericMap()
+		record := conn.toGenericMap(ct.trackerId)
 		addHashField(record, conn.getHash().hashTotal)
 		addTypeField(record, api.ConnTrackOutputRecordTypeName("EndConnection"))
 		var isFirst bool
@@ -155,7 +157,7 @@ func (ct *conntrackImpl) prepareHeartbeatRecords() []config.GenericMap {
 	var outputRecords []config.GenericMap
 	// Convert the connections to GenericMaps and add meta fields
 	for _, conn := range connections {
-		record := conn.toGenericMap()
+		record := conn.toGenericMap(ct.trackerId)
 		addHashField(record, conn.getHash().hashTotal)
 		addTypeField(record, api.ConnTrackOutputRecordTypeName("Heartbeat"))
 		var isFirst bool
@@ -249,6 +251,9 @@ func NewConnectionTrack(opMetrics *operational.Metrics, params config.StageParam
 		}
 	}
 
+	uuid := uuid.New().String()
+	log.Infof("ConnectionTrack TrackerID %s", uuid)
+
 	endpointAFields, endpointBFields := cfg.GetABFields()
 	conntrack := &conntrackImpl{
 		clock:                     clock,
@@ -258,6 +263,7 @@ func NewConnectionTrack(opMetrics *operational.Metrics, params config.StageParam
 		endpointBFields:           endpointBFields,
 		hashProvider:              fnv.New64a,
 		aggregators:               aggregators,
+		trackerId:                 uuid,
 		shouldOutputFlowLogs:      shouldOutputFlowLogs,
 		shouldOutputNewConnection: shouldOutputNewConnection,
 		shouldOutputEndConnection: shouldOutputEndConnection,

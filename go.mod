@@ -7,6 +7,7 @@ require (
 	github.com/benbjohnson/clock v1.3.0
 	github.com/go-kit/kit v0.12.0
 	github.com/golang/snappy v0.0.4
+	github.com/google/uuid v1.3.0
 	github.com/heptiolabs/healthcheck v0.0.0-20211123025425-613501dd5deb
 	github.com/ip2location/ip2location-go/v9 v9.2.0
 	github.com/json-iterator/go v1.1.12
@@ -58,7 +59,6 @@ require (
 	github.com/google/gnostic v0.5.7-v3refs // indirect
 	github.com/google/go-cmp v0.5.7 // indirect
 	github.com/google/gofuzz v1.1.0 // indirect
-	github.com/google/uuid v1.3.0 // indirect
 	github.com/hashicorp/hcl v1.0.0 // indirect
 	github.com/imdario/mergo v0.3.12 // indirect
 	github.com/inconshreveable/mousetrap v1.0.0 // indirect
