@@ -18,7 +18,6 @@
 package kubernetes
 
 import (
-	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -32,6 +31,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/metadata"
+	"k8s.io/client-go/metadata/metadatainformer"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
@@ -265,9 +266,9 @@ func (k *KubeData) initServiceInformer(informerFactory informers.SharedInformerF
 		if !ok {
 			return nil, fmt.Errorf("was expecting a Service. Got: %T", i)
 		}
-		if svc.Spec.ClusterIP == v1.ClusterIPNone {
+		/*if svc.Spec.ClusterIP == v1.ClusterIPNone {
 			return nil, errors.New("not indexing service without ClusterIP")
-		}
+		}*/
 		return &Info{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      svc.Name,
@@ -288,23 +289,8 @@ func (k *KubeData) initServiceInformer(informerFactory informers.SharedInformerF
 	return nil
 }
 
-func (k *KubeData) initReplicaSetInformer(informerFactory informers.SharedInformerFactory) error {
-	k.replicaSets = informerFactory.Apps().V1().ReplicaSets().Informer()
-	// To save space, instead of storing a complete *appvs1.Replicaset instance, the
-	// informer's cache will store a *metav1.ObjectMeta with the minimal required fields
-	if err := k.replicaSets.SetTransform(func(i interface{}) (interface{}, error) {
-		rs, ok := i.(*appsv1.ReplicaSet)
-		if !ok {
-			return nil, fmt.Errorf("was expecting a ReplicaSet. Got: %T", i)
-		}
-		return &metav1.ObjectMeta{
-			Name:            rs.Name,
-			Namespace:       rs.Namespace,
-			OwnerReferences: rs.OwnerReferences,
-		}, nil
-	}); err != nil {
-		return fmt.Errorf("can't set ReplicaSets transform: %w", err)
-	}
+func (k *KubeData) initReplicaSetInformer(informerFactory metadatainformer.SharedInformerFactory) error {
+	k.replicaSets = informerFactory.ForResource(appsv1.SchemeGroupVersion.WithResource("deployment")).Informer()
 	return nil
 }
 
@@ -322,7 +308,11 @@ func (k *KubeData) InitFromConfig(kubeConfigPath string) error {
 		return err
 	}
 
-	err = k.initInformers(kubeClient)
+	metaKubeClient, err := metadata.NewForConfig(config)
+	if err != nil {
+		return err
+	}
+	err = k.initInformers(kubeClient, metaKubeClient)
 	if err != nil {
 		return err
 	}
@@ -357,8 +347,10 @@ func LoadConfig(kubeConfigPath string) (*rest.Config, error) {
 	return config, nil
 }
 
-func (k *KubeData) initInformers(client kubernetes.Interface) error {
+func (k *KubeData) initInformers(client kubernetes.Interface, metaClient metadata.Interface) error {
 	informerFactory := informers.NewSharedInformerFactory(client, syncTime)
+	metadataInformerFactory := metadatainformer.NewSharedInformerFactory(metaClient, syncTime)
+
 	err := k.initNodeInformer(informerFactory)
 	if err != nil {
 		return err
@@ -371,7 +363,7 @@ func (k *KubeData) initInformers(client kubernetes.Interface) error {
 	if err != nil {
 		return err
 	}
-	err = k.initReplicaSetInformer(informerFactory)
+	err = k.initReplicaSetInformer(metadataInformerFactory)
 	if err != nil {
 		return err
 	}
