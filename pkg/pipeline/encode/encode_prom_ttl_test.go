@@ -174,6 +174,40 @@ func Test_TTL_CounterGaugeHistogramExpireOnScrape(t *testing.T) {
 	require.Equal(t, 0, enc.metricCommon.countVecChildren())
 }
 
+func Test_TTL_AggregateHistogramExpiresOnScrape(t *testing.T) {
+	ttl := 250 * time.Millisecond
+	params := api.PromEncode{
+		Prefix:     "flp_",
+		ExpiryTime: ttlDuration(ttl),
+		Metrics: []api.MetricsItem{{
+			Name:     "rtt_seconds",
+			Type:     api.MetricAggHistogram,
+			ValueKey: "Rtts",
+			Labels:   []string{lblSrcNS, lblDstNS},
+			Buckets:  []float64{0.01, 0.1, 1},
+		}},
+	}
+
+	enc, err := initProm(&params)
+	require.NoError(t, err)
+	enc.Encode(config.GenericMap{
+		lblSrcNS: "frontend",
+		lblDstNS: "backend",
+		"Rtts":   []float64{0.005, 0.02},
+	})
+
+	exposed := test.ReadExposedMetrics(t, enc.server)
+	require.Contains(t, exposed, `flp_rtt_seconds_count{DstK8S_Namespace="backend",SrcK8S_Namespace="frontend"} 2`)
+	require.Contains(t, exposed, `flp_rtt_seconds_sum{DstK8S_Namespace="backend",SrcK8S_Namespace="frontend"} 0.025`)
+	require.Contains(t, exposed, `flp_rtt_seconds_bucket{DstK8S_Namespace="backend",SrcK8S_Namespace="frontend",le="0.01"} 1`)
+
+	time.Sleep(ttl + 100*time.Millisecond)
+	exposed = test.ReadExposedMetrics(t, enc.server)
+
+	require.NotContains(t, exposed, `flp_rtt_seconds_count{`)
+	require.Equal(t, 0, enc.metricCommon.countVecChildren())
+}
+
 func Test_TTL_MaxMetricsFreedAfterExpiry(t *testing.T) {
 	// When maxMetrics is hit, new series are dropped; after TTL cleanup, slots reopen.
 	ttl := 250 * time.Millisecond
@@ -344,33 +378,67 @@ func Test_TTL_MaxMetricsReleaseOnConfigurationChange(t *testing.T) {
 }
 
 func Test_TTL_ConcurrentConfigurationCleanup(t *testing.T) {
+	ttl := time.Second
 	params := api.PromEncode{
-		Prefix: "flp_", ExpiryTime: ttlDuration(time.Hour), MaxMetrics: 1,
-		Metrics: []api.MetricsItem{{Name: "samples_total", Type: api.MetricCounter, Labels: []string{"series"}}},
+		Prefix: "flp_", ExpiryTime: ttlDuration(ttl), MaxMetrics: 3,
+		Metrics: []api.MetricsItem{
+			{Name: "samples_total", Type: api.MetricCounter, Labels: []string{"series"}},
+			{Name: "reconfigured_total", Type: api.MetricCounter, ValueKey: "reconfigureValue", Labels: []string{"series"}},
+		},
 	}
 	enc, err := initProm(&params)
 	require.NoError(t, err)
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		for range 100 {
-			enc.metricCommon.cleanupVecExpired()
-		}
-	}()
-	go func() {
-		defer wg.Done()
-		for range 100 {
-			enc.Encode(config.GenericMap{"series": "active"})
-		}
-	}()
-	for range 100 {
-		enc.cleanDeletedMetrics(api.PromEncode{})
-		enc.metricCommon.cleanupInfoStructs()
-		enc.addCounter("flp_samples_total", metrics.Preprocess(&params.Metrics[0]))
+	enc.Encode(config.GenericMap{"series": "expired", "value": 1})
+	enc.Encode(config.GenericMap{"series": "active", "value": 1})
+
+	// Start the concurrent work while the first child is near expiry so cleanup
+	// overlaps with both encoding and removal of a reconfigured metric.
+	time.Sleep(ttl / 2)
+	start := make(chan struct{})
+	const iterations = 100
+	interval := 20 * time.Millisecond
+	retainedConfig := api.PromEncode{
+		Prefix:     params.Prefix,
+		ExpiryTime: params.ExpiryTime,
+		MaxMetrics: params.MaxMetrics,
+		Metrics:    params.Metrics[:1],
 	}
+	otherMetric := metrics.Preprocess(&params.Metrics[1])
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		<-start
+		for range iterations {
+			enc.metricCommon.cleanupVecExpired()
+			time.Sleep(interval)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		for range iterations {
+			enc.Encode(config.GenericMap{"series": "active", "value": 1})
+			time.Sleep(interval)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		for range iterations {
+			enc.cleanDeletedMetrics(retainedConfig)
+			enc.addCounter("flp_reconfigured_total", otherMetric)
+			time.Sleep(interval)
+		}
+	}()
+	close(start)
 	wg.Wait()
-	enc.Encode(config.GenericMap{"series": "active"})
+
+	enc.cleanDeletedMetrics(retainedConfig)
+	enc.metricCommon.cleanupVecExpired()
+	exposed := test.ReadExposedMetrics(t, enc.server)
+	require.Contains(t, exposed, `flp_samples_total{series="active"}`)
+	require.NotContains(t, exposed, `series="expired"`)
 	require.Equal(t, 1, enc.metricCommon.countVecChildren())
 	require.Len(t, enc.metricCommon.admission.entries, 1)
 }
